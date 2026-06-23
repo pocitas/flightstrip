@@ -80,10 +80,15 @@ function handleContextAction(action: () => void, event: MouseEvent) {
   action()
 }
 
+function normalizeRegistrationInput() {
+  editValue.value = editValue.value.toUpperCase()
+}
+
 function commitEdit() {
   if (!editingField.value) return
   const field = editingField.value
-  store.updateStrip(props.strip.id, props.bayId, field, props.strip[field], editValue.value)
+  const nextValue = field === 'registration' ? editValue.value.toUpperCase() : editValue.value
+  store.updateStrip(props.strip.id, props.bayId, field, props.strip[field], nextValue)
   editingField.value = null
 }
 
@@ -116,9 +121,9 @@ const colorDialogVisible = ref(false)
 const pendingColor = ref<StripColor>(props.strip.color)
 
 const colorOptions = [
-  { label: 'Land', value: 'green' as StripColor, bg: '#66bb6a' },
-  { label: 'Touch & Go', value: 'yellow' as StripColor, bg: '#ffeb3b' },
   { label: 'Leave ATZ', value: 'blue' as StripColor, bg: '#64b5f6' },
+  { label: 'Touch & Go', value: 'yellow' as StripColor, bg: '#ffeb3b' },
+  { label: 'Land', value: 'green' as StripColor, bg: '#66bb6a' },
   { label: 'Unknown', value: 'white' as StripColor, bg: '#ffffff' },
 ]
 
@@ -200,6 +205,7 @@ onBeforeUnmount(() => {
             :id="`edit-${strip.id}-registration`"
             v-model="editValue"
             class="strip-input registration-input"
+            @input="normalizeRegistrationInput"
             @blur="commitEdit"
             @keydown="onEditKeydown"
           />
@@ -319,12 +325,13 @@ onBeforeUnmount(() => {
   <!-- Colour selection dialog -->
   <Dialog
     v-model:visible="colorDialogVisible"
-    header="Strip Colour"
+    header="Strip Color"
     :modal="true"
+    :dismissable-mask="true"
     :closable="true"
     class="color-dialog"
   >
-    <p class="color-hint">Right-click strip color to change it instantly:</p>
+    <p class="color-hint">Select a color:</p>
     <div class="color-radio-group" role="radiogroup" aria-label="Strip color selection">
       <label
         v-for="option in colorOptions"
