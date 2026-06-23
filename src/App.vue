@@ -165,10 +165,11 @@ html, body {
 .bays-container {
   display: flex;
   flex: 1;
+  min-height: 0;
   gap: 16px;
   padding: 16px;
   overflow-x: auto;
   overflow-y: hidden;
-  align-items: flex-end;
+  align-items: stretch;
 }
 </style>

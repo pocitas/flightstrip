@@ -348,6 +348,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .flight-strip {
   display: flex;
+  flex: 0 0 auto;
   align-items: stretch;
   border-radius: 6px;
   border: 1px solid rgba(0, 0, 0, 0.15);

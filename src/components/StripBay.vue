@@ -79,7 +79,10 @@ function toggleCollapsed() {
       v-model="strips"
       :data-bay-id="bay.id"
       group="strips"
-      filter=".strip-input"
+      :delay="180"
+      :delay-on-touch-only="true"
+      :touch-start-threshold="4"
+      filter=".strip-input, .editable, .strip-remove"
       :prevent-on-filter="false"
       :animation="150"
       class="bay-strips"
@@ -126,9 +129,10 @@ function toggleCollapsed() {
   display: flex;
   flex-direction: column;
   min-width: 260px;
+  min-height: 0;
   max-width: 320px;
   width: 300px;
-  max-height: 100%;
+  height: 100%;
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid rgba(0, 0, 0, 0.1);
@@ -189,11 +193,19 @@ function toggleCollapsed() {
 .bay-strips {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
   flex: 1;
   padding: 8px;
-  min-height: 60px;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+/* Keep strips visually anchored to bay bottom without shrinking them. */
+.bay-strips::before {
+  content: '';
+  margin-top: auto;
 }
 
 /* Drag states */
