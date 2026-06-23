@@ -73,7 +73,7 @@ function removeStrip() {
 </script>
 
 <template>
-  <div class="flight-strip" :class="colorClass" data-strip-id="props.strip.id">
+  <div class="flight-strip" :class="colorClass" :data-strip-id="strip.id">
     <!-- Drag handle + colour indicator -->
     <div class="strip-sidebar">
       <span class="drag-handle pi pi-bars" title="Drag to move" />
