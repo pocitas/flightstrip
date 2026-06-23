@@ -8,6 +8,7 @@ const props = defineProps<{
   strip: Strip
   bayId: string
   collapsed?: boolean
+  showTouchHandle?: boolean
 }>()
 
 const store = useSessionStore()
@@ -16,7 +17,6 @@ const isLandingPulseActive = ref(false)
 let landingPulseTimeout: number | null = null
 let longPressTimer: number | null = null
 let longPressStartPoint: { x: number; y: number } | null = null
-let suppressContextMenuUntil = 0
 
 // ─── Inline editing ───────────────────────────────────────────────────────────
 
@@ -49,7 +49,6 @@ function beginLongPress(action: () => void, event: TouchEvent) {
   const touch = event.touches[0]
   longPressStartPoint = { x: touch.clientX, y: touch.clientY }
   longPressTimer = window.setTimeout(() => {
-    suppressContextMenuUntil = Date.now() + 1200
     longPressTimer = null
     action()
   }, 550)
@@ -72,11 +71,10 @@ function endLongPress() {
   clearLongPressTimer()
 }
 
-function handleContextAction(action: () => void, event: MouseEvent) {
-  if (Date.now() < suppressContextMenuUntil) {
-    event.preventDefault()
-    return
-  }
+function handleMouseEditAction(action: () => void, event: MouseEvent) {
+  // Touch mode uses long-press for editing; ignore click events there.
+  if (props.showTouchHandle) return
+  if (event.button !== 0) return
   action()
 }
 
@@ -184,11 +182,18 @@ onBeforeUnmount(() => {
   >
     <!-- Sidebar tools -->
     <div class="strip-sidebar">
+      <span
+        v-if="showTouchHandle"
+        class="touch-drag-handle pi pi-grip-lines"
+        title="Drag strip"
+        aria-label="Drag strip"
+      />
+
       <button
         class="color-swatch editable"
         :class="`swatch-${strip.color}`"
-        title="Right-click to edit"
-        @contextmenu.prevent.stop="handleContextAction(openColorDialog, $event)"
+        title="Click to edit"
+        @click.stop="handleMouseEditAction(openColorDialog, $event)"
         @touchstart.stop="beginLongPress(openColorDialog, $event)"
         @touchmove.stop="moveLongPress"
         @touchend.stop="endLongPress"
@@ -214,8 +219,8 @@ onBeforeUnmount(() => {
           <span
             class="field-value registration-value editable"
             :class="{ placeholder: !strip.registration, 'registration-english': isEnglish }"
-            title="Right-click to edit"
-            @contextmenu.prevent.stop="handleContextAction(() => startEdit('registration'), $event)"
+            title="Click to edit"
+            @click.stop="handleMouseEditAction(() => startEdit('registration'), $event)"
             @touchstart.stop="beginLongPress(() => startEdit('registration'), $event)"
             @touchmove.stop="moveLongPress"
             @touchend.stop="endLongPress"
@@ -227,7 +232,15 @@ onBeforeUnmount(() => {
       <!-- Type + Language row -->
       <div class="strip-row">
         <div class="strip-field small">
-          <span class="field-label">Type</span>
+          <span
+            class="field-label editable"
+            title="Click to edit"
+            @click.stop="handleMouseEditAction(() => startEdit('type'), $event)"
+            @touchstart.stop="beginLongPress(() => startEdit('type'), $event)"
+            @touchmove.stop="moveLongPress"
+            @touchend.stop="endLongPress"
+            @touchcancel.stop="endLongPress"
+          >Type</span>
           <template v-if="editingField === 'type'">
             <input
               :id="`edit-${strip.id}-type`"
@@ -241,8 +254,8 @@ onBeforeUnmount(() => {
             <span
               class="field-value editable"
               :class="{ placeholder: !strip.type }"
-              title="Right-click to edit"
-              @contextmenu.prevent.stop="handleContextAction(() => startEdit('type'), $event)"
+              title="Click to edit"
+              @click.stop="handleMouseEditAction(() => startEdit('type'), $event)"
               @touchstart.stop="beginLongPress(() => startEdit('type'), $event)"
               @touchmove.stop="moveLongPress"
               @touchend.stop="endLongPress"
@@ -254,8 +267,8 @@ onBeforeUnmount(() => {
         <div class="strip-field small">
           <span
             class="field-label editable"
-            title="Right-click to edit"
-            @contextmenu.prevent.stop="handleContextAction(toggleLanguage, $event)"
+            title="Click to edit"
+            @click.stop="handleMouseEditAction(toggleLanguage, $event)"
             @touchstart.stop="beginLongPress(toggleLanguage, $event)"
             @touchmove.stop="moveLongPress"
             @touchend.stop="endLongPress"
@@ -263,8 +276,8 @@ onBeforeUnmount(() => {
           >Lang</span>
           <span
             class="field-value editable"
-            title="Right-click to edit"
-            @contextmenu.prevent.stop="handleContextAction(toggleLanguage, $event)"
+            title="Click to edit"
+            @click.stop="handleMouseEditAction(toggleLanguage, $event)"
             @touchstart.stop="beginLongPress(toggleLanguage, $event)"
             @touchmove.stop="moveLongPress"
             @touchend.stop="endLongPress"
@@ -290,8 +303,8 @@ onBeforeUnmount(() => {
           <span
             class="field-value notes-value editable"
             :class="{ placeholder: !strip.notes }"
-            title="Right-click to edit"
-            @contextmenu.prevent.stop="handleContextAction(() => startEdit('notes'), $event)"
+            title="Click to edit"
+            @click.stop="handleMouseEditAction(() => startEdit('notes'), $event)"
             @touchstart.stop="beginLongPress(() => startEdit('notes'), $event)"
             @touchmove.stop="moveLongPress"
             @touchend.stop="endLongPress"
@@ -303,8 +316,8 @@ onBeforeUnmount(() => {
       <div
         class="landing-counter editable"
         :class="{ 'landing-counter-pulse': isLandingPulseActive }"
-        title="Right-click to edit"
-        @contextmenu.prevent.stop="handleContextAction(incrementLandingCount, $event)"
+        title="Click to edit"
+        @click.stop="handleMouseEditAction(incrementLandingCount, $event)"
         @touchstart.stop="beginLongPress(incrementLandingCount, $event)"
         @touchmove.stop="moveLongPress"
         @touchend.stop="endLongPress"
@@ -401,6 +414,18 @@ onBeforeUnmount(() => {
 
 .strip-collapsed .strip-sidebar {
   display: none;
+}
+
+.touch-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.08);
+  color: rgba(0, 0, 0, 0.55);
+  font-size: 12px;
 }
 
 .color-swatch {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
 import { useSessionStore } from '../stores/sessionStore.ts'
 import FlightStrip from './FlightStrip.vue'
@@ -10,6 +10,8 @@ const props = defineProps<{ bay: Bay }>()
 const store = useSessionStore()
 
 const draggableKey = computed(() => `${props.bay.id}:${props.bay.strips.map((s) => s.id).join(',')}`)
+const isTouchDevice = ref(false)
+let touchMediaQuery: MediaQueryList | null = null
 
 // VueDraggable needs a writable list; we proxy via computed to keep the store
 // as the single source of truth.
@@ -69,6 +71,23 @@ function addStrip() {
 function toggleCollapsed() {
   store.setBayCollapsed(props.bay.id, !props.bay.collapsed)
 }
+
+function updateTouchDeviceState() {
+  isTouchDevice.value = touchMediaQuery?.matches ?? false
+}
+
+const dragHandle = computed(() => (isTouchDevice.value ? '.touch-drag-handle' : undefined))
+
+onMounted(() => {
+  touchMediaQuery = window.matchMedia('(hover: none), (pointer: coarse)')
+  updateTouchDeviceState()
+  touchMediaQuery.addEventListener('change', updateTouchDeviceState)
+})
+
+onBeforeUnmount(() => {
+  touchMediaQuery?.removeEventListener('change', updateTouchDeviceState)
+  touchMediaQuery = null
+})
 </script>
 
 <template>
@@ -79,11 +98,8 @@ function toggleCollapsed() {
       v-model="strips"
       :data-bay-id="bay.id"
       group="strips"
-      :delay="180"
-      :delay-on-touch-only="true"
       :touch-start-threshold="4"
-      filter=".strip-input, .editable, .strip-remove"
-      :prevent-on-filter="false"
+      :handle="dragHandle"
       :animation="150"
       class="bay-strips"
       ghost-class="strip-ghost"
@@ -98,6 +114,7 @@ function toggleCollapsed() {
         :strip="strip"
         :bay-id="bay.id"
         :collapsed="bay.collapsed"
+        :show-touch-handle="isTouchDevice"
       />
     </VueDraggable>
 
