@@ -1,2 +1,0 @@
-# flightstrip
-Flight strip management
