@@ -9,6 +9,8 @@ const props = defineProps<{ bay: Bay }>()
 
 const store = useSessionStore()
 
+const draggableKey = computed(() => `${props.bay.id}:${props.bay.strips.map((s) => s.id).join(',')}`)
+
 // VueDraggable needs a writable list; we proxy via computed to keep the store
 // as the single source of truth.
 const strips = computed({
@@ -19,17 +21,19 @@ const strips = computed({
 })
 
 // Called when a strip is reordered *within* this bay
-function onUpdate(evt: { oldIndex?: number; newIndex?: number }) {
+function onUpdate(evt: { oldIndex?: number; newIndex?: number; item: HTMLElement }) {
   const { oldIndex, newIndex } = evt
   if (oldIndex === undefined || newIndex === undefined) return
   if (oldIndex === newIndex) return
 
-  const strip = props.bay.strips[oldIndex]
-  store.moveStrip(strip.id, props.bay.id, oldIndex, props.bay.id, newIndex)
+  const stripId = evt.item.dataset['stripId']
+  if (!stripId) return
+
+  store.moveStrip(stripId, props.bay.id, oldIndex, props.bay.id, newIndex)
 }
 
 // Called when a strip arrives from *another* bay (drag-between-bays)
-function onAdd(evt: { item: HTMLElement; newIndex?: number; from: HTMLElement }) {
+function onAdd(evt: { item: HTMLElement; newIndex?: number; oldIndex?: number; from: HTMLElement }) {
   // vue-draggable-plus already moved the DOM item; we need to sync the store.
   // The source bay id is stored in data-bay-id on the source list element.
   const fromBayId = evt.from.dataset['bayId']
@@ -39,19 +43,12 @@ function onAdd(evt: { item: HTMLElement; newIndex?: number; from: HTMLElement })
   if (!stripId) return
 
   const toIndex = evt.newIndex ?? props.bay.strips.length
-
-  // Find the strip's current index in the destination bay (already moved by
-  // the DOM library) so we pass correct indices.
-  const actualToIdx = props.bay.strips.findIndex((s) => s.id === stripId)
-  const effectiveToIdx = actualToIdx >= 0 ? actualToIdx : toIndex
-
-  // Find source index in the source bay before the DOM mutation.
-  // The DOM library has already moved it; we must look it up in the store.
   const sourceBay = store.activeSession?.bays.find((b) => b.id === fromBayId)
-  if (!sourceBay) return
-  const fromIndex = sourceBay.strips.findIndex((s) => s.id === stripId)
+  const fallbackFromIndex = sourceBay?.strips.findIndex((s) => s.id === stripId) ?? -1
+  const fromIndex = evt.oldIndex ?? fallbackFromIndex
+  if (fromIndex < 0) return
 
-  store.moveStrip(stripId, fromBayId, fromIndex, props.bay.id, effectiveToIdx)
+  store.moveStrip(stripId, fromBayId, fromIndex, props.bay.id, toIndex)
 }
 
 // ─── Add a blank strip to this bay ───────────────────────────────────────────
@@ -61,28 +58,29 @@ function addStrip() {
     id: crypto.randomUUID(),
     registration: '',
     type: '',
-    language: '',
+    language: 'CZ',
+    landingCount: 0,
     color: 'white' as StripColor,
     notes: '',
   }
-  store.addStrip(props.bay.id, strip)
+  store.addStrip(props.bay.id, strip, 0)
+}
+
+function toggleCollapsed() {
+  store.setBayCollapsed(props.bay.id, !props.bay.collapsed)
 }
 </script>
 
 <template>
-  <div class="bay-wrapper">
-    <!-- Bay header -->
-    <div class="bay-header" :style="{ background: bay.color }">
-      <span class="bay-name">{{ bay.name }}</span>
-      <span class="bay-count">{{ bay.strips.length }}</span>
-    </div>
-
+  <div class="bay-wrapper" :class="{ 'bay-collapsed': bay.collapsed }">
     <!-- Draggable strip list -->
     <VueDraggable
+      :key="draggableKey"
       v-model="strips"
       :data-bay-id="bay.id"
       group="strips"
-      handle=".drag-handle"
+      filter=".strip-input"
+      :prevent-on-filter="false"
       :animation="150"
       class="bay-strips"
       ghost-class="strip-ghost"
@@ -96,7 +94,7 @@ function addStrip() {
         :key="strip.id"
         :strip="strip"
         :bay-id="bay.id"
-        :data-strip-id="strip.id"
+        :collapsed="bay.collapsed"
       />
     </VueDraggable>
 
@@ -105,6 +103,21 @@ function addStrip() {
       <span class="pi pi-plus" />
       Add strip
     </button>
+
+    <!-- Bay header -->
+    <div class="bay-header" :style="{ background: bay.color, color: bay.textColor }">
+      <span class="bay-name">{{ bay.name }}</span>
+      <div class="bay-header-right">
+        <span class="bay-count">{{ bay.strips.length }}</span>
+        <button
+          class="collapse-btn"
+          :title="bay.collapsed ? 'Expand bay' : 'Collapse bay'"
+          @click="toggleCollapsed"
+        >
+          <span :class="['pi', bay.collapsed ? 'pi-angle-double-right' : 'pi-angle-double-left']" />
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -114,11 +127,19 @@ function addStrip() {
   flex-direction: column;
   min-width: 260px;
   max-width: 320px;
-  flex: 1;
+  width: 300px;
+  max-height: 100%;
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid rgba(0, 0, 0, 0.1);
   background: #f5f5f5;
+  transition: width 0.15s ease;
+}
+
+.bay-wrapper.bay-collapsed {
+  width: 104px;
+  min-width: 104px;
+  max-width: 104px;
 }
 
 .bay-header {
@@ -127,6 +148,12 @@ function addStrip() {
   justify-content: space-between;
   padding: 10px 14px;
   color: #fff;
+}
+
+.bay-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .bay-name {
@@ -142,7 +169,27 @@ function addStrip() {
   font-size: 12px;
 }
 
+.collapse-btn {
+  border: none;
+  background: rgba(255, 255, 255, 0.28);
+  color: inherit;
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.collapse-btn:hover {
+  background: rgba(255, 255, 255, 0.42);
+}
+
 .bay-strips {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
   flex: 1;
   padding: 8px;
   min-height: 60px;
@@ -161,6 +208,20 @@ function addStrip() {
 
 :deep(.strip-dragging) {
   opacity: 0.8;
+}
+
+.bay-collapsed :deep(.strip-ghost) {
+  min-height: 46px;
+  max-height: 46px;
+  height: 46px;
+  overflow: hidden;
+}
+
+.bay-collapsed :deep(.strip-dragging) {
+  min-height: 46px;
+  max-height: 46px;
+  height: 46px;
+  overflow: hidden;
 }
 
 .bay-add-btn {

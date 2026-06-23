@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useSessionStore } from '../stores/sessionStore.ts'
 import type { TemplateConfig } from '../types/index.ts'
 import type { Bay } from '../types/index.ts'
 import { parseTemplate, serializeTemplate, DEFAULT_TEMPLATE } from '../utils/templateParser.ts'
+import { listTemplates, saveTemplate, deleteTemplate, type StoredTemplate } from '../utils/storage.ts'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
@@ -16,13 +17,122 @@ const store = useSessionStore()
 const newDialogVisible = ref(false)
 const newSessionName = ref('')
 const templateText = ref(serializeTemplate(DEFAULT_TEMPLATE))
+const templates = ref<StoredTemplate[]>([])
+const selectedTemplateId = ref('')
 const templateError = ref('')
 
+function makeDefaultSessionName(now = new Date()): string {
+  const yyyy = now.getFullYear()
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const dd = String(now.getDate()).padStart(2, '0')
+  const hh = String(now.getHours()).padStart(2, '0')
+  const min = String(now.getMinutes()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`
+}
+
 function openNewDialog() {
-  newSessionName.value = 'Session ' + new Date().toLocaleDateString()
-  templateText.value = serializeTemplate(DEFAULT_TEMPLATE)
+  newSessionName.value = makeDefaultSessionName()
+  templates.value = listTemplates()
+  if (templates.value.length === 0) {
+    templateText.value = serializeTemplate(DEFAULT_TEMPLATE)
+    selectedTemplateId.value = ''
+  } else {
+    selectedTemplateId.value = templates.value[0].id
+    templateText.value = templates.value[0].text
+  }
   templateError.value = ''
   newDialogVisible.value = true
+}
+
+const selectedTemplate = computed(() => templates.value.find((t) => t.id === selectedTemplateId.value) ?? null)
+
+function selectTemplate(templateId: string) {
+  const t = templates.value.find((it) => it.id === templateId)
+  if (!t) return
+  selectedTemplateId.value = templateId
+  templateText.value = t.text
+  templateError.value = ''
+}
+
+function saveSelectedTemplateText() {
+  const current = selectedTemplate.value
+  if (!current) return
+
+  const now = new Date().toISOString()
+  let nextName = current.name
+
+  try {
+    const parsed = parseTemplate(templateText.value)
+    templateError.value = ''
+    if (parsed.name.trim().length > 0) nextName = parsed.name.trim()
+  } catch (e) {
+    templateError.value = String(e)
+  }
+
+  const updated: StoredTemplate = {
+    ...current,
+    name: nextName,
+    text: templateText.value,
+    updatedAt: now,
+  }
+  saveTemplate(updated)
+
+  const idx = templates.value.findIndex((t) => t.id === updated.id)
+  if (idx !== -1) templates.value[idx] = updated
+}
+
+watch(templateText, () => {
+  saveSelectedTemplateText()
+})
+
+function createTemplate() {
+  const now = new Date()
+  const timestamp = now.toISOString()
+  const name = `Template ${makeDefaultSessionName(now)}`
+  const parsed = parseTemplate(serializeTemplate(DEFAULT_TEMPLATE))
+  parsed.name = name
+
+  const created: StoredTemplate = {
+    id: crypto.randomUUID(),
+    name,
+    text: serializeTemplate(parsed),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+
+  saveTemplate(created)
+  templates.value = listTemplates()
+  selectTemplate(created.id)
+}
+
+function removeTemplate(templateId: string) {
+  if (templates.value.length <= 1) {
+    alert('At least one template must exist.')
+    return
+  }
+  if (!confirm('Delete this template?')) return
+
+  const idx = templates.value.findIndex((t) => t.id === templateId)
+  deleteTemplate(templateId)
+  templates.value = listTemplates()
+
+  if (selectedTemplateId.value === templateId) {
+    const fallback = templates.value[Math.max(0, idx - 1)] ?? templates.value[0]
+    if (fallback) selectTemplate(fallback.id)
+  }
+}
+
+function exportTemplate() {
+  const current = selectedTemplate.value
+  if (!current) return
+  const safeName = current.name.trim().replace(/\s+/g, '_') || 'template'
+  const blob = new Blob([templateText.value], { type: 'text/plain' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${safeName}.fst`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 function createSession() {
@@ -41,26 +151,8 @@ function createSession() {
   }
 
   const bays: Bay[] = config.bays.map((b) => ({ ...b, strips: [] }))
-  store.createSession(newSessionName.value || 'Unnamed Session', config.name, bays)
+  store.createSession(newSessionName.value || 'Unnamed Session', selectedTemplate.value?.name ?? config.name, bays)
   newDialogVisible.value = false
-}
-
-// ─── Load from file ───────────────────────────────────────────────────────────
-
-function loadTemplateFile() {
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.accept = '.fst,.txt'
-  input.onchange = () => {
-    const file = input.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      templateText.value = reader.result as string
-    }
-    reader.readAsText(file)
-  }
-  input.click()
 }
 
 // ─── Open existing session ────────────────────────────────────────────────────
@@ -174,24 +266,46 @@ function formatDate(iso: string) {
       />
 
       <label class="form-label">
-        Template
-        <button class="load-file-btn" @click="loadTemplateFile">
-          <span class="pi pi-folder-open" /> Load .fst file
-        </button>
+        Templates
+        <span class="template-actions-inline">
+          <Button label="New default" size="small" text icon="pi pi-plus" @click="createTemplate" />
+          <Button label="Export .fst" size="small" text icon="pi pi-download" @click="exportTemplate" />
+        </span>
       </label>
+
+      <div class="template-list">
+        <div
+          v-for="template in templates"
+          :key="template.id"
+          class="template-item"
+          :class="{ selected: selectedTemplateId === template.id }"
+          @click="selectTemplate(template.id)"
+        >
+          <span class="template-name">{{ template.name }}</span>
+          <Button
+            icon="pi pi-trash"
+            text
+            severity="danger"
+            title="Delete template"
+            @click.stop="removeTemplate(template.id)"
+          />
+        </div>
+      </div>
+
+      <label class="form-label">Template text (auto-saved)</label>
       <Textarea
         v-model="templateText"
         class="w-full template-textarea"
         :rows="12"
-        placeholder="Paste or load a template (.fst) file…"
+        placeholder="Paste template text here…"
       />
       <p v-if="templateError" class="form-error">{{ templateError }}</p>
 
       <div class="template-hint">
         <strong>Template format (.fst):</strong> Plain text with
         <code>name=…</code> at the top, then one <code>[bay]</code> block per
-        bay (<code>id</code>, <code>name</code>, <code>color</code>,
-        <code>order</code>).
+        bay (<code>id</code>, <code>name</code>, <code>color</code>, <code>textColor</code>,
+        <code>collapsed</code>, <code>order</code>).
       </div>
     </div>
 
@@ -305,17 +419,46 @@ function formatDate(iso: string) {
   justify-content: space-between;
 }
 
-.load-file-btn {
-  background: none;
-  border: 1px solid #90caf9;
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 12px;
-  cursor: pointer;
-  color: #1e88e5;
+.template-actions-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.load-file-btn:hover { background: #e3f2fd; }
+.template-list {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  max-height: 170px;
+  overflow-y: auto;
+  background: #fff;
+}
+
+.template-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid #eeeeee;
+}
+
+.template-item:last-child {
+  border-bottom: none;
+}
+
+.template-item:hover {
+  background: #f5f9ff;
+}
+
+.template-item.selected {
+  background: #e3f2fd;
+}
+
+.template-name {
+  font-size: 13px;
+  font-weight: 600;
+}
 
 .template-textarea {
   font-family: 'Courier New', monospace;

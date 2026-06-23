@@ -8,9 +8,19 @@
 
 import type { SessionMeta, Command } from '../types/index.ts'
 import { serializeLog, deserializeLog } from './commandLog.ts'
+import { serializeTemplate, DEFAULT_TEMPLATE } from './templateParser.ts'
 
 const SESSIONS_KEY = 'fs:sessions'
 const LOG_PREFIX = 'fs:log:'
+const TEMPLATES_KEY = 'fs:templates'
+
+export interface StoredTemplate {
+  id: string
+  name: string
+  text: string
+  createdAt: string
+  updatedAt: string
+}
 
 // ─── Session metadata ─────────────────────────────────────────────────────────
 
@@ -61,4 +71,41 @@ export function appendCommand(sessionId: string, command: Command): void {
 
 export function getRawLog(sessionId: string): string {
   return localStorage.getItem(LOG_PREFIX + sessionId) ?? ''
+}
+
+// ─── Templates ────────────────────────────────────────────────────────────────
+
+export function listTemplates(): StoredTemplate[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TEMPLATES_KEY) ?? '[]') as StoredTemplate[]
+    if (parsed.length > 0) return parsed
+  } catch {
+    // fallback to seeding below
+  }
+
+  const now = new Date().toISOString()
+  const seeded: StoredTemplate[] = [
+    {
+      id: crypto.randomUUID(),
+      name: DEFAULT_TEMPLATE.name,
+      text: serializeTemplate(DEFAULT_TEMPLATE),
+      createdAt: now,
+      updatedAt: now,
+    },
+  ]
+  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(seeded))
+  return seeded
+}
+
+export function saveTemplate(template: StoredTemplate): void {
+  const templates = listTemplates()
+  const idx = templates.findIndex((t) => t.id === template.id)
+  if (idx >= 0) templates[idx] = template
+  else templates.push(template)
+  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates))
+}
+
+export function deleteTemplate(templateId: string): void {
+  const templates = listTemplates().filter((t) => t.id !== templateId)
+  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates))
 }

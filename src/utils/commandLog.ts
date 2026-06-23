@@ -37,6 +37,7 @@ export function appendToLog(existing: string, command: Command): string {
 // ─── Inverse commands (for undo) ──────────────────────────────────────────────
 
 import type {
+  BaySetCollapsedCommand,
   StripAddCommand,
   StripRemoveCommand,
   StripMoveCommand,
@@ -97,6 +98,17 @@ export function invertCommand(cmd: Command): Command | null {
           newValue: cmd.p.oldValue,
         },
       } satisfies StripUpdateCommand
+
+    case 'BAY_SET_COLLAPSED':
+      return {
+        t: now(),
+        cmd: 'BAY_SET_COLLAPSED',
+        p: {
+          bayId: cmd.p.bayId,
+          oldCollapsed: cmd.p.newCollapsed,
+          newCollapsed: cmd.p.oldCollapsed,
+        },
+      } satisfies BaySetCollapsedCommand
 
     case 'SESSION_START':
       // SESSION_START is not undoable

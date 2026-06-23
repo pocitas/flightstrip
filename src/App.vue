@@ -9,13 +9,25 @@ const store = useSessionStore()
 
 const session = computed(() => store.activeSession)
 const canUndo = computed(() => store.undoStack.length > 0)
+const canRedo = computed(() => store.redoStack.length > 0)
 
 // ─── Keyboard shortcut ────────────────────────────────────────────────────────
 
 function handleKeydown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+  const hasMod = e.ctrlKey || e.metaKey
+  if (!hasMod) return
+
+  const key = e.key.toLowerCase()
+
+  if (key === 'z' && !e.shiftKey) {
     e.preventDefault()
     store.undo()
+    return
+  }
+
+  if (key === 'y' || (key === 'z' && e.shiftKey)) {
+    e.preventDefault()
+    store.redo()
   }
 }
 
@@ -58,6 +70,14 @@ const sortedBays = computed(() =>
             :disabled="!canUndo"
             title="Undo last action (Ctrl+Z)"
             @click="store.undo()"
+          />
+          <Button
+            label="Redo"
+            icon="pi pi-replay"
+            text
+            :disabled="!canRedo"
+            title="Redo action (Ctrl+Y / Ctrl+Shift+Z)"
+            @click="store.redo()"
           />
           <Button
             label="Export log"
@@ -149,6 +169,6 @@ html, body {
   padding: 16px;
   overflow-x: auto;
   overflow-y: hidden;
-  align-items: flex-start;
+  align-items: flex-end;
 }
 </style>

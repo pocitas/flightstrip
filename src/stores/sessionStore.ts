@@ -17,7 +17,7 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Session, Bay, Strip, Command, StripColor } from '../types/index.ts'
+import type { Session, Bay, Strip, Command, StripColor, CommandSource } from '../types/index.ts'
 import { invertCommand } from '../utils/commandLog.ts'
 import {
   listSessions,
@@ -35,6 +35,8 @@ export const useSessionStore = defineStore('session', () => {
   const sessions = ref(listSessions())
   const activeSession = ref<Session | null>(null)
   const undoStack = ref<Command[]>([])
+  const redoStack = ref<Command[]>([])
+  const pendingRegistrationEditStripId = ref<string | null>(null)
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -75,10 +77,21 @@ export const useSessionStore = defineStore('session', () => {
 
       case 'STRIP_MOVE': {
         const fromBay = findBay(bays, cmd.p.fromBayId)
+        const toBay = findBay(bays, cmd.p.toBayId)
+
         const { index: fromIdx } = findStrip(fromBay, cmd.p.stripId)
+        if (fromIdx !== cmd.p.fromIndex) {
+          throw new Error(
+            `Non-deterministic STRIP_MOVE source index for strip ${cmd.p.stripId}: expected ${cmd.p.fromIndex}, actual ${fromIdx}`,
+          )
+        }
+
+        if (fromBay.id !== toBay.id && toBay.strips.some((s) => s.id === cmd.p.stripId)) {
+          throw new Error(`Non-deterministic STRIP_MOVE target already contains strip: ${cmd.p.stripId}`)
+        }
+
         const [strip] = fromBay.strips.splice(fromIdx, 1)
 
-        const toBay = findBay(bays, cmd.p.toBayId)
         // When moving within the same bay the toIndex may have shifted
         const toIdx = Math.min(cmd.p.toIndex, toBay.strips.length)
         toBay.strips.splice(toIdx, 0, strip)
@@ -92,12 +105,18 @@ export const useSessionStore = defineStore('session', () => {
         for (const bay of bays) {
           const idx = bay.strips.findIndex((s) => s.id === cmd.p.stripId)
           if (idx !== -1) {
-            ;(bay.strips[idx] as unknown as Record<string, string>)[cmd.p.field] = cmd.p.newValue
+            ;(bay.strips[idx] as unknown as Record<string, unknown>)[cmd.p.field] = cmd.p.newValue
             found = true
             break
           }
         }
         if (!found) throw new Error(`Strip not found for update: ${cmd.p.stripId}`)
+        break
+      }
+
+      case 'BAY_SET_COLLAPSED': {
+        const bay = findBay(bays, cmd.p.bayId)
+        bay.collapsed = cmd.p.newCollapsed
         break
       }
     }
@@ -107,21 +126,37 @@ export const useSessionStore = defineStore('session', () => {
   // This is the single entry point for all state changes – from the local UI
   // and in the future from the Centrifugo remote control API.
 
-  function dispatch(cmd: Command, addToUndo = true): void {
+  type DispatchOptions = {
+    trackUndo?: boolean
+    clearRedo?: boolean
+    source?: CommandSource
+  }
+
+  function dispatch(cmd: Command, options: DispatchOptions = {}): void {
     if (!activeSession.value) return
 
-    applyToState(activeSession.value.bays, cmd)
+    const trackUndo = options.trackUndo ?? cmd.cmd !== 'SESSION_START'
+    const clearRedo = options.clearRedo ?? trackUndo
+    const source = options.source ?? 'user'
 
-    if (addToUndo && cmd.cmd !== 'SESSION_START') {
-      undoStack.value.push(cmd)
+    const effectiveCmd: Command = {
+      ...cmd,
+      src: cmd.src ?? source,
     }
 
-    appendCommand(activeSession.value.id, cmd)
+    applyToState(activeSession.value.bays, effectiveCmd)
+
+    if (trackUndo && effectiveCmd.cmd !== 'SESSION_START') {
+      undoStack.value.push(effectiveCmd)
+      if (clearRedo) redoStack.value = []
+    }
+
+    appendCommand(activeSession.value.id, effectiveCmd)
 
     // Keep session metadata (updatedAt) current
     const meta = sessions.value.find((s) => s.id === activeSession.value!.id)
     if (meta) {
-      meta.updatedAt = cmd.t
+      meta.updatedAt = effectiveCmd.t
       saveSessionMeta(meta)
     }
   }
@@ -132,7 +167,39 @@ export const useSessionStore = defineStore('session', () => {
     const last = undoStack.value.pop()
     if (!last) return
     const inverse = invertCommand(last)
-    if (inverse) dispatch(inverse, true)
+    if (!inverse) return
+
+    dispatch(
+      {
+        ...inverse,
+        src: 'undo',
+      },
+      {
+        trackUndo: false,
+        clearRedo: false,
+        source: 'undo',
+      },
+    )
+
+    redoStack.value.push(last)
+  }
+
+  function redo(): void {
+    const next = redoStack.value.pop()
+    if (!next) return
+
+    dispatch(
+      {
+        ...next,
+        t: new Date().toISOString(),
+        src: 'redo',
+      },
+      {
+        trackUndo: true,
+        clearRedo: false,
+        source: 'redo',
+      },
+    )
   }
 
   // ── Public: session management ────────────────────────────────────────────
@@ -156,19 +223,23 @@ export const useSessionStore = defineStore('session', () => {
 
     activeSession.value = session
     undoStack.value = []
+    redoStack.value = []
 
     // Log SESSION_START so the log is self-contained and can be restored
     const startCmd: Command = {
       t: timestamp,
       cmd: 'SESSION_START',
+      src: 'system',
       p: {
         sessionId: id,
         name,
         templateName,
-        bays: bays.map(({ id: bid, name: bn, color: bc, order: bo }) => ({
+        bays: bays.map(({ id: bid, name: bn, color: bc, textColor: btc, collapsed: bcollapsed, order: bo }) => ({
           id: bid,
           name: bn,
           color: bc,
+          textColor: btc,
+          collapsed: bcollapsed,
           order: bo,
         })),
       },
@@ -188,22 +259,59 @@ export const useSessionStore = defineStore('session', () => {
       throw new Error('Log is missing SESSION_START')
     }
 
-    const bays: Bay[] = startCmd.p.bays.map((b) => ({ ...b, strips: [] }))
+    const bays: Bay[] = startCmd.p.bays.map((b) => ({
+      id: b.id,
+      name: b.name,
+      color: b.color,
+      textColor: b.textColor ?? '#ffffff',
+      collapsed: b.collapsed ?? false,
+      order: b.order,
+      strips: [],
+    }))
 
     // Replay all commands in order to rebuild state
     const undoable: Command[] = []
+    const redoable: Command[] = []
     for (const cmd of commands) {
       applyToState(bays, cmd)
-      if (cmd.cmd !== 'SESSION_START') undoable.push(cmd)
+      if (cmd.cmd === 'SESSION_START') continue
+
+      const src = cmd.src ?? 'user'
+
+      if (src === 'undo') {
+        const moved = undoable.pop()
+        if (moved) {
+          redoable.push(moved)
+        } else {
+          const original = invertCommand(cmd)
+          if (original && original.cmd !== 'SESSION_START') {
+            redoable.push(original)
+          }
+        }
+        continue
+      }
+
+      if (src === 'redo') {
+        if (redoable.length > 0) redoable.pop()
+        undoable.push(cmd)
+        continue
+      }
+
+      if (src === 'system') continue
+
+      undoable.push(cmd)
+      redoable.length = 0
     }
 
     activeSession.value = { ...meta, bays }
     undoStack.value = undoable
+    redoStack.value = redoable
   }
 
   function closeSession(): void {
     activeSession.value = null
     undoStack.value = []
+    redoStack.value = []
   }
 
   function removeSession(sessionId: string): void {
@@ -212,13 +320,14 @@ export const useSessionStore = defineStore('session', () => {
     if (activeSession.value?.id === sessionId) {
       activeSession.value = null
       undoStack.value = []
+      redoStack.value = []
     }
   }
 
   function exportLog(): void {
     if (!activeSession.value) return
     const raw = getRawLog(activeSession.value.id)
-    const filename = `${activeSession.value.name.replace(/\s+/g, '_')}.fsl`
+    const filename = `${activeSession.value.name.replace(/\s+/g, '_')}.txt`
     downloadLog(filename, raw)
   }
 
@@ -232,12 +341,19 @@ export const useSessionStore = defineStore('session', () => {
 
   // ── Convenience dispatch wrappers (typed sugar) ───────────────────────────
 
-  function addStrip(bayId: string, strip: Strip): void {
+  function addStrip(bayId: string, strip: Strip, index?: number): void {
     dispatch({
       t: new Date().toISOString(),
       cmd: 'STRIP_ADD',
-      p: { bayId, strip },
+      p: { bayId, strip, index },
     })
+    pendingRegistrationEditStripId.value = strip.id
+  }
+
+  function claimPendingRegistrationEdit(stripId: string): boolean {
+    if (pendingRegistrationEditStripId.value !== stripId) return false
+    pendingRegistrationEditStripId.value = null
+    return true
   }
 
   function removeStrip(stripId: string, bayId: string): void {
@@ -269,8 +385,8 @@ export const useSessionStore = defineStore('session', () => {
     stripId: string,
     bayId: string,
     field: keyof Omit<Strip, 'id'>,
-    oldValue: string,
-    newValue: string,
+    oldValue: Strip[keyof Omit<Strip, 'id'>],
+    newValue: Strip[keyof Omit<Strip, 'id'>],
   ): void {
     if (oldValue === newValue) return
     dispatch({
@@ -284,12 +400,27 @@ export const useSessionStore = defineStore('session', () => {
     updateStrip(stripId, bayId, 'color', oldColor, newColor)
   }
 
+  function setBayCollapsed(bayId: string, newCollapsed: boolean): void {
+    if (!activeSession.value) return
+    const bay = findBay(activeSession.value.bays, bayId)
+    if (bay.collapsed === newCollapsed) return
+
+    dispatch({
+      t: new Date().toISOString(),
+      cmd: 'BAY_SET_COLLAPSED',
+      p: { bayId, oldCollapsed: bay.collapsed, newCollapsed },
+    })
+  }
+
   return {
     sessions,
     activeSession,
     undoStack,
+    redoStack,
+    pendingRegistrationEditStripId,
     dispatch,
     undo,
+    redo,
     createSession,
     openSession,
     closeSession,
@@ -297,9 +428,11 @@ export const useSessionStore = defineStore('session', () => {
     exportLog,
     importLog,
     addStrip,
+    claimPendingRegistrationEdit,
     removeStrip,
     moveStrip,
     updateStrip,
     updateStripColor,
+    setBayCollapsed,
   }
 })

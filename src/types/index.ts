@@ -11,6 +11,7 @@ export interface Strip {
   registration: string
   type: string        // aircraft type, e.g. "C172"
   language: string    // language of communication, e.g. "EN"
+  landingCount: number
   color: StripColor
   notes: string
 }
@@ -20,6 +21,8 @@ export interface Bay {
   id: string
   name: string
   color: string       // header background colour (hex)
+  textColor: string   // header text colour (hex)
+  collapsed: boolean
   order: number
   strips: Strip[]
 }
@@ -32,6 +35,8 @@ export interface TemplateConfig {
     id: string
     name: string
     color: string
+    textColor: string
+    collapsed: boolean
     order: number
   }>
 }
@@ -64,10 +69,14 @@ export type CommandType =
   | 'STRIP_REMOVE'
   | 'STRIP_MOVE'
   | 'STRIP_UPDATE'
+  | 'BAY_SET_COLLAPSED'
+
+export type CommandSource = 'user' | 'undo' | 'redo' | 'remote' | 'system'
 
 export interface BaseCommand {
   t: string           // ISO-8601 timestamp
   cmd: CommandType
+  src?: CommandSource // provenance for history/replay diagnostics
 }
 
 export interface SessionStartCommand extends BaseCommand {
@@ -76,7 +85,16 @@ export interface SessionStartCommand extends BaseCommand {
     sessionId: string
     name: string
     templateName: string
-    bays: Array<{ id: string; name: string; color: string; order: number }>
+    bays: Array<{ id: string; name: string; color: string; textColor?: string; collapsed?: boolean; order: number }>
+  }
+}
+
+export interface BaySetCollapsedCommand extends BaseCommand {
+  cmd: 'BAY_SET_COLLAPSED'
+  p: {
+    bayId: string
+    oldCollapsed: boolean
+    newCollapsed: boolean
   }
 }
 
@@ -116,8 +134,8 @@ export interface StripUpdateCommand extends BaseCommand {
     stripId: string
     bayId: string
     field: keyof Omit<Strip, 'id'>
-    oldValue: string
-    newValue: string
+    oldValue: Strip[keyof Omit<Strip, 'id'>]
+    newValue: Strip[keyof Omit<Strip, 'id'>]
   }
 }
 
@@ -127,3 +145,4 @@ export type Command =
   | StripRemoveCommand
   | StripMoveCommand
   | StripUpdateCommand
+  | BaySetCollapsedCommand

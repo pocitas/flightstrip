@@ -26,12 +26,14 @@
 import type { TemplateConfig } from '../types/index.ts'
 
 export const DEFAULT_TEMPLATE: TemplateConfig = {
-  name: 'Default ATZ',
+  name: 'Default Tower',
   version: '1',
   bays: [
-    { id: 'arrivals', name: 'Arrivals', color: '#388E3C', order: 1 },
-    { id: 'patterns', name: 'Patterns', color: '#F57F17', order: 2 },
-    { id: 'departures', name: 'Departures', color: '#1565C0', order: 3 },
+    { id: 'dep', name: 'DEP', color: '#c8e6c9', textColor: '#111111', collapsed: false, order: 1 },
+    { id: 'okr', name: 'OKR', color: '#fff9c4', textColor: '#111111', collapsed: false, order: 2 },
+    { id: 'arr', name: 'ARR', color: '#bbdefb', textColor: '#111111', collapsed: false, order: 3 },
+    { id: 'ldg', name: 'LDG', color: '#757575', textColor: '#ffffff', collapsed: true, order: 4 },
+    { id: 'out', name: 'OUT', color: '#ffffff', textColor: '#111111', collapsed: true, order: 5 },
   ],
 }
 
@@ -77,10 +79,13 @@ export function parseTemplate(text: string): TemplateConfig {
 }
 
 function parseBaySection(s: Record<string, string>) {
+  const collapsedRaw = (s['collapsed'] ?? '').toLowerCase()
   return {
     id: s['id'] ?? crypto.randomUUID(),
     name: s['name'] ?? 'Bay',
     color: s['color'] ?? '#607D8B',
+    textColor: s['textColor'] ?? '#ffffff',
+    collapsed: collapsedRaw === 'true' || collapsedRaw === '1' || collapsedRaw === 'yes',
     order: s['order'] !== undefined ? parseInt(s['order'], 10) : 999,
   }
 }
@@ -100,6 +105,8 @@ export function serializeTemplate(config: TemplateConfig): string {
     lines.push(`id=${bay.id}`)
     lines.push(`name=${bay.name}`)
     lines.push(`color=${bay.color}`)
+    lines.push(`textColor=${bay.textColor}`)
+    lines.push(`collapsed=${bay.collapsed ? 'true' : 'false'}`)
     lines.push(`order=${bay.order}`)
     lines.push('')
   }
